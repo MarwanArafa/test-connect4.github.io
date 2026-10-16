@@ -24,9 +24,14 @@ button.go{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 .score{display:flex;justify-content:space-between;font-weight:600;margin-bottom:8px}
 .score .x{color:var(--x)}.score .o{color:var(--o)}
 .status{min-height:1.5em;text-align:center;margin:0 0 8px;font-weight:600}
+/* Hover hint: arrow above the column showing where your piece would drop */
+.hints{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;padding:0 8px;margin-bottom:2px}
+.hint{text-align:center;font-size:1.2rem;line-height:1;color:transparent;user-select:none;transition:color .1s}
+.hint.on.X{color:var(--x)}
+.hint.on.O{color:var(--o)}
 .board{background:var(--board);border:4px solid var(--board-edge);border-radius:14px;padding:8px;display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
-.col{display:grid;grid-template-rows:repeat(6,1fr);gap:6px;background:none;border:0;padding:0;border-radius:8px}
-.col:hover:not(:disabled){background:rgba(0,0,0,.12)}
+.col{display:grid;grid-template-rows:repeat(6,1fr);gap:6px;background:none;border:0;padding:0;border-radius:8px;cursor:pointer}
+.col:hover:not(:disabled),.col:focus-visible{background:rgba(0,0,0,.12)}
 .col:disabled{cursor:default}
 .cell{aspect-ratio:1;border-radius:50%;background:var(--hole);box-shadow:inset 0 3px 6px rgba(0,0,0,.35)}
 .cell.X{background:var(--x);box-shadow:inset 0 -4px 6px rgba(0,0,0,.3)}
@@ -35,8 +40,9 @@ button.go{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 .cell.win{outline:4px solid var(--ink);outline-offset:-4px}
 @keyframes drop{from{transform:translateY(-260%)}to{transform:none}}
 @media (prefers-reduced-motion:reduce){.cell.new{animation:none}}
-.note{font-size:.8rem;color:var(--mute);margin:8px 0 0}
+.note{font-size:.8rem;color:var(--mute);margin:8px 0 0;text-align:center}
 </style>
+<base target="_blank">
 </head>
 <body>
 <main>
@@ -48,13 +54,16 @@ button.go{background:var(--ink);color:var(--bg);border-color:var(--ink)}
     <select id="opp"><option value="2">Human vs AI</option><option value="1">Human vs Human</option></select></div>
   <div class="row" id="diffRow"><label for="diff">Difficulty</label>
     <select id="diff"><option value="2">Easy (depth 2)</option><option value="4">Medium (depth 4)</option><option value="6" selected>Hard (depth 6)</option><option value="7">Expert (depth 7)</option></select></div>
+  <div class="row" id="firstRow"><label for="first">First move</label>
+    <select id="first"><option value="you">You start (Red)</option><option value="ai">AI starts (Blue)</option><option value="random">Random</option></select></div>
   <div class="row"><button class="go" id="newGame">New game</button><button id="theme" aria-label="Switch light or dark theme">Switch theme</button></div>
 </section>
 <section class="panel" aria-label="Game board">
   <div class="score"><span class="x" id="s1">Red: 0</span><span class="o" id="s2">Blue (AI): 0</span></div>
   <p class="status" id="status" role="status" aria-live="polite"></p>
+  <div class="hints" id="hints"></div>
   <div class="board" id="board"></div>
-  <p class="note">Red moves first. Click a column to drop a piece.</p>
+  <p class="note" id="note">Red moves first. Click a column (or use arrow keys + Enter) to drop a piece.</p>
 </section>
 </main>
 <script>
@@ -179,14 +188,36 @@ function countLines(b,p){
     if(pr<0||pr>=R||pc<0||pc>=C||b[pr][pc]!==p)s++}
   return s}
 const nextRow=c=>{for(let r=R-1;r>=0;r--)if(board[r][c]===' ')return r;return -1};
+const humanTurn=()=>!over&&!busy&&(!vsAI||cur==='X');
+
+function turnText(){
+  if(over)return '';
+  const who=cur==='X'?'Red':'Blue';
+  if(vsAI)return cur==='X'?'Your turn — click a column':'AI is thinking...';
+  return who+' to move'}
+function renderHints(){
+  const h=$('hints');h.innerHTML='';
+  for(let c=0;c<C;c++){
+    const d=document.createElement('div');
+    d.className='hint';
+    d.textContent='▼';
+    h.appendChild(d)}}
+function showHint(c){
+  if(!humanTurn()||nextRow(c)<0){renderHints();return}
+  const d=$('hints').children[c];
+  d.className='hint on '+cur}
 
 function render(){
   const el=$('board');el.innerHTML='';
   for(let c=0;c<C;c++){
     const b=document.createElement('button');
     b.className='col';b.setAttribute('aria-label','Drop in column '+(c+1));
-    b.disabled=over||busy||nextRow(c)<0;
+    b.disabled=!humanTurn()||nextRow(c)<0;
     b.onclick=()=>humanMove(c);
+    b.onmouseenter=()=>showHint(c);
+    b.onmouseleave=renderHints;
+    b.onfocus=()=>showHint(c);
+    b.onblur=renderHints;
     for(let r=0;r<R;r++){
       const d=document.createElement('div');
       d.className='cell'+(board[r][c]!==' '?' '+board[r][c]:'');
@@ -194,19 +225,27 @@ function render(){
       if(winCells.some(w=>w[0]===r&&w[1]===c))d.classList.add('win');
       b.appendChild(d)}
     el.appendChild(b)}
+  renderHints();
   const s1=sa?countLines(board,'X'):(over&&findFour(board,'X')?1:0);
   const s2=sa?countLines(board,'O'):(over&&findFour(board,'O')?1:0);
   $('s1').textContent='Red: '+s1;
-  $('s2').textContent=(vsAI?'Blue (AI): ':'Blue: ')+s2}
+  $('s2').textContent=(vsAI?'Blue (AI): ':'Blue: ')+s2;
+  $('note').textContent=vsAI?'You are Red. Click a column (or use ← → then Enter) to drop a piece.':'Red moves first. Click a column to drop a piece.'}
 function setStatus(t){$('status').textContent=t}
 
 function newGame(){
   gameId++;send({reset:true});
   board=Array.from({length:R},()=>Array(C).fill(' '));
-  cur='X';over=false;moves=0;busy=false;lastMove=null;winCells=[];
+  over=false;moves=0;busy=false;lastMove=null;winCells=[];
   sa=$('mode').value==='2';vsAI=$('opp').value==='2';depth=+$('diff').value;
   $('diffRow').style.display=vsAI?'flex':'none';
-  render();setStatus('Red to move')}
+  $('firstRow').style.display=vsAI?'flex':'none';
+  const first=$('first').value;
+  const aiStarts=vsAI&&(first==='ai'||(first==='random'&&Math.random()<0.5));
+  cur=aiStarts?'O':'X';
+  render();
+  if(aiStarts){setStatus('AI (Blue) starts...');aiTurn()}
+  else setStatus(turnText())}
 
 function place(c){
   const r=nextRow(c);if(r<0)return false;
@@ -224,26 +263,38 @@ function place(c){
   cur=cur==='X'?'O':'X';return true}
 
 function humanMove(c){
-  if(over||busy)return;
-  if(vsAI&&cur==='O')return;
+  if(!humanTurn())return;
   if(!place(c))return;
   render();
   if(over)return;
-  if(vsAI&&cur==='O')aiTurn();
-  else setStatus((cur==='X'?'Red':'Blue')+' to move')}
+  if(vsAI&&cur==='O'){setStatus(turnText());aiTurn()}
+  else setStatus(turnText())}
+
+// Keyboard play: arrows move across columns, Enter/Space drops
+document.addEventListener('keydown',e=>{
+  if(e.key!=='ArrowLeft'&&e.key!=='ArrowRight'&&e.key!=='Enter'&&e.key!==' ')return;
+  if(!board||over||busy)return;
+  const cols=[...document.querySelectorAll('.col')];
+  if(!cols.length)return;
+  const active=document.activeElement;
+  let i=active&&active.classList.contains('col')?cols.indexOf(active):3;
+  if(i<0)i=3;
+  if(e.key==='ArrowLeft'){cols[Math.max(0,i-1)].focus();e.preventDefault()}
+  else if(e.key==='ArrowRight'){cols[Math.min(C-1,i+1)].focus();e.preventDefault()}
+  else if(active&&active.classList.contains('col')){active.click();e.preventDefault()}});
 
 function aiTurn(){
-  busy=true;render();setStatus('AI is thinking (depth '+depth+')...');
+  busy=true;render();
   const id=gameId;
   setTimeout(()=>send({board:board.map(r=>r.slice()),depth,sa,id}),30)}
 
 function onAI(d){
   if(d.id!==gameId)return;
   busy=false;place(d.col);render();
-  if(!over)setStatus('Red to move')}
+  if(!over)setStatus(turnText())}
 
 $('newGame').onclick=newGame;
-['mode','opp','diff'].forEach(id=>$(id).onchange=newGame);
+['mode','opp','diff','first'].forEach(id=>$(id).onchange=newGame);
 $('theme').onclick=()=>{
   const root=document.documentElement;
   const dark=root.dataset.theme?root.dataset.theme==='dark':matchMedia('(prefers-color-scheme:dark)').matches;
