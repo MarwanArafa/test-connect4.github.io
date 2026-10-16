@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connect 4: Professional Edition</title>
+<style>
+:root{--bg:#f3f1ec;--ink:#1d1d22;--mute:#6b6b75;--board:#f2b705;--board-edge:#c48f00;--x:#d6322e;--o:#1f5fd1;--panel:#fff;--line:#d9d6cd;--hole:#f3f1ec;color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#16171b;--ink:#ececf0;--mute:#9a9aa6;--board-edge:#a47500;--panel:#202127;--line:#33343c;--hole:#16171b;color-scheme:dark}}
+:root[data-theme=dark]{--bg:#16171b;--ink:#ececf0;--mute:#9a9aa6;--board-edge:#a47500;--panel:#202127;--line:#33343c;--hole:#16171b;color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font:16px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;min-height:100%;padding:16px;display:flex;justify-content:center}
+main{width:100%;max-width:520px}
+h1{font-size:1.5rem;margin:4px 0 12px;letter-spacing:-.01em}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:12px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.row+.row{margin-top:8px}
+label{font-size:.85rem;color:var(--mute);min-width:64px}
+select,button{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:6px 10px}
+button{cursor:pointer}
+button.go{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+:focus-visible{outline:3px solid var(--o);outline-offset:2px}
+.score{display:flex;justify-content:space-between;font-weight:600;margin-bottom:8px}
+.score .x{color:var(--x)}.score .o{color:var(--o)}
+.status{min-height:1.5em;text-align:center;margin:0 0 8px;font-weight:600}
+.board{background:var(--board);border:4px solid var(--board-edge);border-radius:14px;padding:8px;display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+.col{display:grid;grid-template-rows:repeat(6,1fr);gap:6px;background:none;border:0;padding:0;border-radius:8px}
+.col:hover:not(:disabled){background:rgba(0,0,0,.12)}
+.col:disabled{cursor:default}
+.cell{aspect-ratio:1;border-radius:50%;background:var(--hole);box-shadow:inset 0 3px 6px rgba(0,0,0,.35)}
+.cell.X{background:var(--x);box-shadow:inset 0 -4px 6px rgba(0,0,0,.3)}
+.cell.O{background:var(--o);box-shadow:inset 0 -4px 6px rgba(0,0,0,.3)}
+.cell.new{animation:drop .28s ease-in}
+.cell.win{outline:4px solid var(--ink);outline-offset:-4px}
+@keyframes drop{from{transform:translateY(-260%)}to{transform:none}}
+@media (prefers-reduced-motion:reduce){.cell.new{animation:none}}
+.note{font-size:.8rem;color:var(--mute);margin:8px 0 0}
+</style>
+</head>
+<body>
+<main>
+<h1>Connect 4: Professional Edition</h1>
+<section class="panel" aria-label="Game settings">
+  <div class="row"><label for="mode">Mode</label>
+    <select id="mode"><option value="1">Classic (first to 4 wins)</option><option value="2">Score Attack (most lines when full)</option></select></div>
+  <div class="row"><label for="opp">Opponent</label>
+    <select id="opp"><option value="2">Human vs AI</option><option value="1">Human vs Human</option></select></div>
+  <div class="row" id="diffRow"><label for="diff">Difficulty</label>
+    <select id="diff"><option value="2">Easy (depth 2)</option><option value="4">Medium (depth 4)</option><option value="6" selected>Hard (depth 6)</option><option value="7">Expert (depth 7)</option></select></div>
+  <div class="row"><button class="go" id="newGame">New game</button><button id="theme" aria-label="Switch light or dark theme">Switch theme</button></div>
+</section>
+<section class="panel" aria-label="Game board">
+  <div class="score"><span class="x" id="s1">Red: 0</span><span class="o" id="s2">Blue (AI): 0</span></div>
+  <p class="status" id="status" role="status" aria-live="polite"></p>
+  <div class="board" id="board"></div>
+  <p class="note">Red moves first. Click a column to drop a piece.</p>
+</section>
+</main>
+<script>
+/* ---------- AI ENGINE (runs in a Web Worker so the page never freezes) ---------- */
+function engineMain(){
+  const R=6,C=7,MAXTT=2000000;
+  let tt=new Map(),SA=false;
+  const nextRow=(b,c)=>{for(let r=R-1;r>=0;r--)if(b[r][c]===' ')return r;return -1};
+  const D=[[0,1],[1,0],[1,1],[1,-1]];
+  function win(b,p){
+    for(let r=0;r<R;r++)for(let c=0;c<C;c++)for(const[dr,dc]of D){
+      const er=r+3*dr,ec=c+3*dc;if(er<0||er>=R||ec<0||ec>=C)continue;
+      if(b[r][c]===p&&b[r+dr][c+dc]===p&&b[r+2*dr][c+2*dc]===p&&b[er][ec]===p)return true}
+    return false}
+  // Score Attack: each maximal run of 4+ counts once (look-behind check)
+  function lines(b,p){
+    let s=0;
+    for(let r=0;r<R;r++)for(let c=0;c<C;c++)for(const[dr,dc]of D){
+      const er=r+3*dr,ec=c+3*dc;if(er<0||er>=R||ec<0||ec>=C)continue;
+      if(b[r][c]!==p||b[r+dr][c+dc]!==p||b[r+2*dr][c+2*dc]!==p||b[er][ec]!==p)continue;
+      const pr=r-dr,pc=c-dc;
+      if(pr<0||pr>=R||pc<0||pc>=C||b[pr][pc]!==p)s++}
+    return s}
+  function evalWindow(w,p){
+    let cp=0,ce=0;for(const x of w){if(x===p)cp++;else if(x===' ')ce++}
+    const co=4-cp-ce;let s=0;
+    if(cp===4)return SA?0:1000000;
+    if(cp===3&&ce===1){s+=(w[0]===' '&&w[3]===' ')?5000:150}
+    else if(cp===2&&ce===2){const con=(w[0]===p&&w[1]===p)||(w[1]===p&&w[2]===p)||(w[2]===p&&w[3]===p);s+=con?50:60}
+    if(co===3&&ce===1){s-=(w[0]===' '&&w[3]===' ')?10000:500}
+    else if(co===2&&ce===2)s-=50;
+    return s}
+  function evalBoard(b,p){
+    let s=0;
+    for(let r=0;r<R;r++){if(b[r][3]===p)s+=200;if(b[r][2]===p||b[r][4]===p)s+=100}
+    for(let r=0;r<R;r++)for(let c=0;c<C;c++)for(const[dr,dc]of D){
+      const er=r+3*dr,ec=c+3*dc;if(er<0||er>=R||ec<0||ec>=C)continue;
+      s+=evalWindow([b[r][c],b[r+dr][c+dc],b[r+2*dr][c+2*dc],b[er][ec]],p)}
+    return s}
+  const saEval=b=>(lines(b,'O')-lines(b,'X'))*1000000+evalBoard(b,'O');
+  function countThreats(b,p){
+    let t=0;for(let c=0;c<C;c++){const r=nextRow(b,c);if(r<0)continue;b[r][c]=p;if(win(b,p))t++;b[r][c]=' '}return t}
+  function ordered(b,max){
+    const p=max?'O':'X',m=[];
+    for(let c=0;c<C;c++){
+      const r=nextRow(b,c);if(r<0)continue;
+      b[r][c]=p;let s=win(b,p)?1000000:evalBoard(b,p);b[r][c]=' ';
+      s+=30-Math.abs(c-3)*10;
+      if(r<R-1&&b[r+1][c]===p)s+=40;
+      m.push([c,s])}
+    m.sort((a,b)=>b[1]-a[1]);return m.map(x=>x[0])}
+  function adaptive(b,base){
+    const t=countThreats(b,'O')+countThreats(b,'X');
+    if(t>=2)return base+2;if(t===1)return base+1;
+    let n=0;for(const row of b)for(const v of row)if(v!==' ')n++;
+    if(n<8)return Math.max(3,base-1);if(n>30)return base+1;return base}
+  function minimax(b,depth,alpha,beta,max,orig){
+    if(!SA){if(win(b,'O'))return[-1,1000000+depth];if(win(b,'X'))return[-1,-1000000-depth]}
+    let empty=0;for(const row of b)for(const v of row)if(v===' ')empty++;
+    if(!SA&&empty<=orig*2)depth=empty;
+    if(depth===0)return[-1,SA?saEval(b):evalBoard(b,'O')];
+    const moves=ordered(b,max);
+    if(!moves.length)return[-1,SA?saEval(b):0];
+    const key=b.map(r=>r.join('')).join('')+(max?'T':'F');
+    const a0=alpha,b0=beta,e=tt.get(key);
+    if(e&&e.d>=depth){
+      if(e.f===0)return[e.c,e.s];
+      if(e.f===1)alpha=Math.max(alpha,e.s);else beta=Math.min(beta,e.s);
+      if(alpha>=beta)return[e.c,e.s]}
+    let best=max?-Infinity:Infinity,bc=moves[0];
+    for(const c of moves){
+      const r=nextRow(b,c);b[r][c]=max?'O':'X';
+      const s=minimax(b,depth-1,alpha,beta,!max,orig)[1];
+      b[r][c]=' ';
+      if(max?s>best:s<best){best=s;bc=c}
+      if(max)alpha=Math.max(alpha,best);else beta=Math.min(beta,best);
+      if(alpha>=beta)break}
+    const f=best<=a0?2:best>=b0?1:0; // 0 exact, 1 lower bound, 2 upper bound
+    if(tt.size>=MAXTT)tt.clear();
+    tt.set(key,{d:depth,s:best,c:bc,f});
+    return[bc,best]}
+  function choose(b,base,sa){
+    SA=sa;const d=adaptive(b,base);
+    if(!sa){
+      // 1) take a winning move, 2) otherwise block the opponent's win
+      for(const p of['O','X'])for(let c=0;c<C;c++){
+        const r=nextRow(b,c);if(r<0)continue;
+        b[r][c]=p;const w=win(b,p);b[r][c]=' ';if(w)return c}}
+    let col=minimax(b.map(r=>r.slice()),d,-Infinity,Infinity,true,d)[0];
+    if(col<0)for(let c=0;c<C;c++)if(nextRow(b,c)>=0){col=c;break}
+    return col}
+  return{choose,reset:()=>tt.clear()}
+}
+
+/* ---------- UI ---------- */
+const R=6,C=7,$=id=>document.getElementById(id);
+let worker=null,local=null;
+try{
+  worker=new Worker(URL.createObjectURL(new Blob(['const engineMain='+engineMain+';const api=engineMain();onmessage=e=>{if(e.data.reset){api.reset();return}postMessage({col:api.choose(e.data.board,e.data.depth,e.data.sa),id:e.data.id})}'],{type:'text/javascript'})));
+  worker.onmessage=e=>onAI(e.data);
+  worker.onerror=()=>{worker=null};
+}catch(err){worker=null}
+// Falls back to running the engine on the main thread if Workers are blocked (e.g. sandboxed previews)
+function send(m){
+  if(worker){worker.postMessage(m);return}
+  if(!local)local=engineMain();
+  if(m.reset){local.reset();return}
+  setTimeout(()=>onAI({col:local.choose(m.board,m.depth,m.sa),id:m.id}),0)}
+let board,cur,over,moves,sa,vsAI,depth,busy,gameId=0,lastMove=null,winCells=[];
+const D=[[0,1],[1,0],[1,1],[1,-1]];
+function findFour(b,p){
+  for(let r=0;r<R;r++)for(let c=0;c<C;c++)for(const[dr,dc]of D){
+    const er=r+3*dr,ec=c+3*dc;if(er<0||er>=R||ec<0||ec>=C)continue;
+    if([0,1,2,3].every(k=>b[r+k*dr][c+k*dc]===p))return[0,1,2,3].map(k=>[r+k*dr,c+k*dc])}
+  return null}
+function countLines(b,p){
+  let s=0;
+  for(let r=0;r<R;r++)for(let c=0;c<C;c++)for(const[dr,dc]of D){
+    const er=r+3*dr,ec=c+3*dc;if(er<0||er>=R||ec<0||ec>=C)continue;
+    if(![0,1,2,3].every(k=>b[r+k*dr][c+k*dc]===p))continue;
+    const pr=r-dr,pc=c-dc;
+    if(pr<0||pr>=R||pc<0||pc>=C||b[pr][pc]!==p)s++}
+  return s}
+const nextRow=c=>{for(let r=R-1;r>=0;r--)if(board[r][c]===' ')return r;return -1};
+
+function render(){
+  const el=$('board');el.innerHTML='';
+  for(let c=0;c<C;c++){
+    const b=document.createElement('button');
+    b.className='col';b.setAttribute('aria-label','Drop in column '+(c+1));
+    b.disabled=over||busy||nextRow(c)<0;
+    b.onclick=()=>humanMove(c);
+    for(let r=0;r<R;r++){
+      const d=document.createElement('div');
+      d.className='cell'+(board[r][c]!==' '?' '+board[r][c]:'');
+      if(lastMove&&lastMove[0]===r&&lastMove[1]===c)d.classList.add('new');
+      if(winCells.some(w=>w[0]===r&&w[1]===c))d.classList.add('win');
+      b.appendChild(d)}
+    el.appendChild(b)}
+  const s1=sa?countLines(board,'X'):(over&&findFour(board,'X')?1:0);
+  const s2=sa?countLines(board,'O'):(over&&findFour(board,'O')?1:0);
+  $('s1').textContent='Red: '+s1;
+  $('s2').textContent=(vsAI?'Blue (AI): ':'Blue: ')+s2}
+function setStatus(t){$('status').textContent=t}
+
+function newGame(){
+  gameId++;send({reset:true});
+  board=Array.from({length:R},()=>Array(C).fill(' '));
+  cur='X';over=false;moves=0;busy=false;lastMove=null;winCells=[];
+  sa=$('mode').value==='2';vsAI=$('opp').value==='2';depth=+$('diff').value;
+  $('diffRow').style.display=vsAI?'flex':'none';
+  render();setStatus('Red to move')}
+
+function place(c){
+  const r=nextRow(c);if(r<0)return false;
+  board[r][c]=cur;moves++;lastMove=[r,c];
+  if(!sa){
+    const w=findFour(board,cur);
+    if(w){over=true;winCells=w;render();
+      setStatus(cur==='X'?'Red wins!':(vsAI?'The AI wins!':'Blue wins!'));return true}}
+  if(moves>=R*C){
+    over=true;render();
+    if(sa){const a=countLines(board,'X'),b=countLines(board,'O');
+      setStatus(a>b?'Red wins '+a+' to '+b:b>a?(vsAI?'The AI wins ':'Blue wins ')+b+' to '+a:'Draw '+a+' to '+b)}
+    else setStatus('Draw: the board is full');
+    return true}
+  cur=cur==='X'?'O':'X';return true}
+
+function humanMove(c){
+  if(over||busy)return;
+  if(vsAI&&cur==='O')return;
+  if(!place(c))return;
+  render();
+  if(over)return;
+  if(vsAI&&cur==='O')aiTurn();
+  else setStatus((cur==='X'?'Red':'Blue')+' to move')}
+
+function aiTurn(){
+  busy=true;render();setStatus('AI is thinking (depth '+depth+')...');
+  const id=gameId;
+  setTimeout(()=>send({board:board.map(r=>r.slice()),depth,sa,id}),30)}
+
+function onAI(d){
+  if(d.id!==gameId)return;
+  busy=false;place(d.col);render();
+  if(!over)setStatus('Red to move')}
+
+$('newGame').onclick=newGame;
+['mode','opp','diff'].forEach(id=>$(id).onchange=newGame);
+$('theme').onclick=()=>{
+  const root=document.documentElement;
+  const dark=root.dataset.theme?root.dataset.theme==='dark':matchMedia('(prefers-color-scheme:dark)').matches;
+  root.dataset.theme=dark?'light':'dark'};
+newGame();
+</script>
+</body>
+</html>
